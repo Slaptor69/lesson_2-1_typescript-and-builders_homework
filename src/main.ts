@@ -1,26 +1,30 @@
 import './style.css'
-import type { Booking } from './models/booking'
+import type { Booking, WorkshopId } from './models/booking'
 import { initialBookings } from './data/initial-bookings'
 import { TYPESCRIPT_CAPACITY, BUILD_CAPACITY } from './data/capacities'
 import { countSeats } from './lib/count-seats'
-// HW-Б1: подключите расчёты из ./lib/availability.
-// HW-Б2: импортируйте ./assets/workshops.svg как URL.
+import { getRemainingSeats } from './lib/availability'
+import workshopsUrl from './assets/workshops.svg?url'
 
 const bookings: Array<Booking> = [...initialBookings]
-
-// Проверка из практики уже работает. В базе менять её не требуется.
-function readSeats(raw: FormDataEntryValue | null): number | null {
-  if (typeof raw !== 'string' || raw.trim() === '') return null
-  const seats = Number(raw)
-  if (!Number.isInteger(seats) || seats < 1 || seats > 5) return null
-  return seats
+const workshopNames: Record<WorkshopId, string> = {
+  typescript: 'TypeScript',
+  build: 'Сборка проекта',
 }
 
-// HW-А2: замените заглушку; нужный результат WorkshopId | null.
-// Для проверки через форму сначала включите список ui.workshop в месте HW-А4.
-function readWorkshop(raw: FormDataEntryValue | null): null {
-  void raw
-  return null
+type Result<T> = { ok: true; value: T } | { ok: false; error: string }
+
+function readSeats(raw: FormDataEntryValue | null): Result<number> {
+  const seats = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN
+  if (!Number.isInteger(seats) || seats < 1 || seats > 5) {
+    return { ok: false, error: 'Введите целое число участников от 1 до 5.' }
+  }
+  return { ok: true, value: seats }
+}
+
+function readWorkshop(raw: FormDataEntryValue | null): Result<WorkshopId> {
+  if (raw === 'typescript' || raw === 'build') return { ok: true, value: raw }
+  return { ok: false, error: 'Выберите занятие: TypeScript или Сборка проекта.' }
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -112,24 +116,26 @@ if (!(form instanceof HTMLFormElement) || !(list instanceof HTMLUListElement)
 // Проверенные DOM-элементы уже готовы к использованию.
 const ui = { form, list, total, message, workshop, typescriptFree, buildFree, logo, notice }
 
-// HW-А4: сделайте список ui.workshop доступным для выбора уже при проверке А2.
-// Здесь же скройте или удалите найденный ui.notice после проверки DOM выше.
-// HW-Б2: задайте ui.logo.src, alt и покажите изображение.
+ui.workshop.disabled = false
+ui.notice.hidden = true
+ui.logo.src = workshopsUrl
+ui.logo.hidden = false
 
-function render(items: Booking[]) {
+function render(items: Booking[]): void {
   ui.list.replaceChildren()
   items.forEach((booking) => {
     const item = document.createElement('li')
     const title = document.createElement('strong')
     const details = document.createElement('span')
     title.textContent = booking.name
-    // HW-А4: добавьте название занятия в подробности карточки.
-    details.textContent = `${booking.seats} участн. · ${booking.status === 'confirmed' ? 'Подтверждена' : 'Новая'} · ${booking.source}`
+    const status = booking.status === 'confirmed' ? 'Подтверждена' : 'Новая'
+    details.textContent = `${workshopNames[booking.workshop]} · ${booking.seats} участн. · ${status} · ${booking.source}`
     item.append(title, details)
     ui.list.append(item)
   })
   ui.total.textContent = String(countSeats(items))
-  // HW-А4: обновите ui.typescriptFree и ui.buildFree через общий расчёт.
+  ui.typescriptFree.textContent = String(getRemainingSeats(items, 'typescript'))
+  ui.buildFree.textContent = String(getRemainingSeats(items, 'build'))
 }
 
 ui.form.addEventListener('submit', (event) => {
@@ -141,22 +147,35 @@ ui.form.addEventListener('submit', (event) => {
     return
   }
 
-  const seats = readSeats(data.get('seats'))
-  if (seats === null) {
-    ui.message.textContent = 'Введите целое число участников от 1 до 5.'
+  const seatsResult = readSeats(data.get('seats'))
+  if (!seatsResult.ok) {
+    ui.message.textContent = seatsResult.error
     return
   }
 
-  // HW-А2: прочитайте data.get('workshop') через readWorkshop, обработайте отказ.
-  // HW-А3: сравните число участников с остатком мест выбранного занятия до изменения bookings.
+  const workshopResult = readWorkshop(data.get('workshop'))
+  if (!workshopResult.ok) {
+    ui.message.textContent = workshopResult.error
+    return
+  }
+
+  const seats = seatsResult.value
+  const selectedWorkshop = workshopResult.value
+  const remainingSeats = getRemainingSeats(bookings, selectedWorkshop)
+  if (seats > remainingSeats) {
+    ui.message.textContent = remainingSeats === 0
+      ? 'На выбранном занятии нет свободных мест.'
+      : `На выбранном занятии недостаточно мест для группы. Свободных мест: ${remainingSeats}.`
+    return
+  }
 
   const booking: Booking = {
     id: crypto.randomUUID(),
     name: rawName.trim(),
     seats,
+    workshop: selectedWorkshop,
     status: 'new',
     source: 'web',
-    // HW-А1: добавьте проверенное занятие.
   }
   bookings.push(booking)
   render(bookings)
